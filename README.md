@@ -1,7 +1,6 @@
 # langfuse-on-ec2
 
-> **This project is intended for PoC / development use only.**
-> It is NOT designed for production workloads. The author assumes no responsibility for any damages, data loss, or security incidents arising from the use of this project in a production environment. Use at your own risk.
+> 本プロジェクトは PoC・開発用途を想定しています。本番環境での利用は想定していません。本プロジェクトの利用により生じた損害・データ損失・セキュリティインシデント等について、作者は一切の責任を負いません。自己責任でご利用ください。
 
 Langfuse v3 を EC2 × 2台 + docker-compose でセルフホストする構成です。
 AWS CDK でインフラを構築し、GitHub Actions でワンクリック起動・停止できます。
