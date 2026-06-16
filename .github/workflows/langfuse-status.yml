@@ -1,0 +1,93 @@
+name: Langfuse Status
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  SSM_BACKEND_ID: /langfuse/dev/backend-instance-id
+  SSM_FRONTEND_ID: /langfuse/dev/frontend-instance-id
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get instance IDs from SSM
+        id: ids
+        run: |
+          BACKEND_ID=$(aws ssm get-parameter --name "$SSM_BACKEND_ID" --query 'Parameter.Value' --output text)
+          FRONTEND_ID=$(aws ssm get-parameter --name "$SSM_FRONTEND_ID" --query 'Parameter.Value' --output text)
+          echo "backend=$BACKEND_ID" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Check instance states
+        id: state
+        run: |
+          RESULT=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.ids.outputs.backend }}" "${{ steps.ids.outputs.frontend }}" \
+            --query 'Reservations[].Instances[].{Id:InstanceId,State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,Type:InstanceType}' \
+            --output table)
+          echo "$RESULT"
+          echo "result<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$RESULT" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+          # Frontend の状態を取得
+          FRONTEND_STATE=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.ids.outputs.frontend }}" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text)
+          FRONTEND_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.ids.outputs.frontend }}" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          echo "frontend_state=$FRONTEND_STATE" >> "$GITHUB_OUTPUT"
+          echo "frontend_ip=$FRONTEND_IP" >> "$GITHUB_OUTPUT"
+
+      - name: Langfuse health check (if running)
+        if: steps.state.outputs.frontend_state == 'running'
+        run: |
+          FRONTEND_IP="${{ steps.state.outputs.frontend_ip }}"
+          if [ "$FRONTEND_IP" != "None" ] && [ -n "$FRONTEND_IP" ]; then
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "http://${FRONTEND_IP}:3000/api/public/health" || echo "000")
+            echo "Health check: HTTP $HTTP_CODE"
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "🟢 Langfuse is healthy at http://${FRONTEND_IP}:3000"
+            else
+              echo "🟡 Langfuse is starting or unhealthy (HTTP $HTTP_CODE)"
+            fi
+          fi
+
+      - name: Summary
+        run: |
+          FRONTEND_STATE="${{ steps.state.outputs.frontend_state }}"
+          FRONTEND_IP="${{ steps.state.outputs.frontend_ip }}"
+
+          if [ "$FRONTEND_STATE" = "running" ] && [ "$FRONTEND_IP" != "None" ]; then
+            STATUS="🟢 Running"
+            URL="http://${FRONTEND_IP}:3000"
+          elif [ "$FRONTEND_STATE" = "stopped" ]; then
+            STATUS="🔴 Stopped"
+            URL="(停止中)"
+          else
+            STATUS="🟡 $FRONTEND_STATE"
+            URL="(不明)"
+          fi
+
+          echo "## Langfuse Status: $STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: $URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backend: \`${{ steps.ids.outputs.backend }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Frontend: \`${{ steps.ids.outputs.frontend }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.state.outputs.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

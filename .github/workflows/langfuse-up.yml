@@ -1,0 +1,88 @@
+name: Langfuse Up
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  SSM_BACKEND_ID: /langfuse/dev/backend-instance-id
+  SSM_FRONTEND_ID: /langfuse/dev/frontend-instance-id
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get instance IDs from SSM
+        id: ids
+        run: |
+          BACKEND_ID=$(aws ssm get-parameter --name "$SSM_BACKEND_ID" --query 'Parameter.Value' --output text)
+          FRONTEND_ID=$(aws ssm get-parameter --name "$SSM_FRONTEND_ID" --query 'Parameter.Value' --output text)
+          echo "backend=$BACKEND_ID" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND_ID" >> "$GITHUB_OUTPUT"
+          echo "Backend: $BACKEND_ID / Frontend: $FRONTEND_ID"
+
+      - name: Start Backend EC2
+        run: |
+          aws ec2 start-instances --instance-ids "${{ steps.ids.outputs.backend }}"
+          echo "Backend starting..."
+
+      - name: Wait for Backend to run
+        run: |
+          aws ec2 wait instance-running --instance-ids "${{ steps.ids.outputs.backend }}"
+          echo "Backend is running"
+
+      - name: Health check — wait for DB services
+        run: |
+          BACKEND_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.ids.outputs.backend }}" \
+            --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+          echo "Backend private IP: $BACKEND_IP"
+
+          # SSM Run Command で Backend 内の postgres を確認
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "${{ steps.ids.outputs.backend }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["for i in $(seq 1 60); do docker compose -f /opt/langfuse/docker-compose.yml ps --format json | grep -q running && exit 0; sleep 2; done; exit 1"]' \
+            --query 'Command.CommandId' --output text)
+          aws ssm wait command-executed \
+            --command-id "$CMD_ID" \
+            --instance-id "${{ steps.ids.outputs.backend }}" || true
+          echo "Backend DB services healthy"
+
+      - name: Start Frontend EC2
+        run: |
+          aws ec2 start-instances --instance-ids "${{ steps.ids.outputs.frontend }}"
+          echo "Frontend starting..."
+
+      - name: Wait for Frontend to run
+        run: |
+          aws ec2 wait instance-running --instance-ids "${{ steps.ids.outputs.frontend }}"
+          echo "Frontend is running"
+
+      - name: Get Langfuse URL
+        id: url
+        run: |
+          FRONTEND_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ steps.ids.outputs.frontend }}" \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+          echo "url=http://${FRONTEND_IP}:3000" >> "$GITHUB_OUTPUT"
+          echo "🟢 Langfuse is starting at http://${FRONTEND_IP}:3000"
+          echo "  (起動完了まで 2〜3 分かかります)"
+
+      - name: Summary
+        run: |
+          echo "## 🟢 Langfuse Started" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: ${{ steps.url.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backend: \`${{ steps.ids.outputs.backend }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Frontend: \`${{ steps.ids.outputs.frontend }}\`" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,83 @@
+name: Langfuse Down
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-northeast-1
+  SSM_BACKEND_ID: /langfuse/dev/backend-instance-id
+  SSM_FRONTEND_ID: /langfuse/dev/frontend-instance-id
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get instance IDs from SSM
+        id: ids
+        run: |
+          BACKEND_ID=$(aws ssm get-parameter --name "$SSM_BACKEND_ID" --query 'Parameter.Value' --output text)
+          FRONTEND_ID=$(aws ssm get-parameter --name "$SSM_FRONTEND_ID" --query 'Parameter.Value' --output text)
+          echo "backend=$BACKEND_ID" >> "$GITHUB_OUTPUT"
+          echo "frontend=$FRONTEND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Graceful stop Frontend (docker compose down via SSM)
+        run: |
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "${{ steps.ids.outputs.frontend }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["cd /opt/langfuse && docker compose down"]' \
+            --query 'Command.CommandId' --output text) || true
+          aws ssm wait command-executed \
+            --command-id "$CMD_ID" \
+            --instance-id "${{ steps.ids.outputs.frontend }}" || true
+          echo "Frontend compose stopped"
+
+      - name: Stop Frontend EC2
+        run: |
+          aws ec2 stop-instances --instance-ids "${{ steps.ids.outputs.frontend }}"
+          echo "Frontend stopping..."
+
+      - name: Wait for Frontend to stop
+        run: |
+          aws ec2 wait instance-stopped --instance-ids "${{ steps.ids.outputs.frontend }}"
+          echo "Frontend stopped"
+
+      - name: Graceful stop Backend (docker compose down via SSM)
+        run: |
+          CMD_ID=$(aws ssm send-command \
+            --instance-ids "${{ steps.ids.outputs.backend }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["cd /opt/langfuse && docker compose down"]' \
+            --query 'Command.CommandId' --output text) || true
+          aws ssm wait command-executed \
+            --command-id "$CMD_ID" \
+            --instance-id "${{ steps.ids.outputs.backend }}" || true
+          echo "Backend compose stopped"
+
+      - name: Stop Backend EC2
+        run: |
+          aws ec2 stop-instances --instance-ids "${{ steps.ids.outputs.backend }}"
+          echo "Backend stopping..."
+
+      - name: Wait for Backend to stop
+        run: |
+          aws ec2 wait instance-stopped --instance-ids "${{ steps.ids.outputs.backend }}"
+          echo "Backend stopped"
+
+      - name: Summary
+        run: |
+          echo "## 🔴 Langfuse Stopped" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Backend: \`${{ steps.ids.outputs.backend }}\` — stopped" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Frontend: \`${{ steps.ids.outputs.frontend }}\` — stopped" >> "$GITHUB_STEP_SUMMARY"
+          echo "- EBS data は保持されます (次回起動で復元)" >> "$GITHUB_STEP_SUMMARY"

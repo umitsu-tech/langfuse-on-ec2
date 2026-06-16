@@ -1,0 +1,31 @@
+{
+  "name": "langfuse-on-ec2",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Langfuse セルフホスト (EC2 × 2台 + docker-compose) の AWS CDK 構成",
+  "bin": {
+    "langfuse-on-ec2": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
+    "aws-cdk": "^2.1027.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "constructs": "^10.4.0"
+  }
+}
