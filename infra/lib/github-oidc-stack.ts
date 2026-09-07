@@ -5,7 +5,7 @@ import { Stage } from "./config";
 
 export interface GitHubOidcStackProps extends StackProps {
   readonly stage: Stage;
-  /** GitHub リポジトリ (例: "ryuki-imachi/ai-agent-poc-template")。 */
+  /** GitHub リポジトリ (例: "umitsu-tech/ai-agent-poc-template")。 */
   readonly repo: string;
 }
 
